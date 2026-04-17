@@ -49,6 +49,17 @@ func (w *captureWriter) Write(data []byte) (int, error) {
 	return w.ResponseWriter.Write(data)
 }
 
+func (w *captureWriter) WriteString(s string) (int, error) {
+	_, _ = w.body.WriteString(s)
+	return w.ResponseWriter.WriteString(s)
+}
+
+// ReadFrom captures fast-path io.Copy writes that bypass Write.
+func (w *captureWriter) ReadFrom(r io.Reader) (int64, error) {
+	tr := io.TeeReader(r, &w.body)
+	return io.Copy(w.ResponseWriter, tr)
+}
+
 type streamCaptureWriter struct {
 	gin.ResponseWriter
 	buf bytes.Buffer
@@ -57,6 +68,17 @@ type streamCaptureWriter struct {
 func (w *streamCaptureWriter) Write(data []byte) (int, error) {
 	_, _ = w.buf.Write(data)
 	return w.ResponseWriter.Write(data)
+}
+
+func (w *streamCaptureWriter) WriteString(s string) (int, error) {
+	_, _ = w.buf.WriteString(s)
+	return w.ResponseWriter.WriteString(s)
+}
+
+// ReadFrom captures fast-path io.Copy writes that bypass Write.
+func (w *streamCaptureWriter) ReadFrom(r io.Reader) (int64, error) {
+	tr := io.TeeReader(r, &w.buf)
+	return io.Copy(w.ResponseWriter, tr)
 }
 
 func returnCachedResponse(c *gin.Context, data []byte, isStream bool) {

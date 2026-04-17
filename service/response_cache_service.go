@@ -5,7 +5,10 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"net"
+	"os"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -196,7 +199,18 @@ func AutoRenewHotEntries(minHits int) int {
 }
 
 func initResponseCache() {
-	if !common.ResponseCacheEnabled || common.ResponseCacheRedisAddr == "" {
+	if !common.ResponseCacheEnabled {
+		common.SysLog("response cache disabled by CACHE_ENABLED")
+		responseCacheOn = false
+		return
+	}
+	if common.ResponseCacheRedisAddr == "" {
+		common.SysError("response cache redis addr is empty (CACHE_REDIS_ADDR), cache disabled")
+		responseCacheOn = false
+		return
+	}
+	if !common.ResponseCacheAllowShared && isSharedWithPrimaryRedis(common.ResponseCacheRedisAddr) {
+		common.SysError("response cache redis shares the same instance as primary redis; cache disabled for safety. Set CACHE_ALLOW_SHARED_REDIS=true to override")
 		responseCacheOn = false
 		return
 	}
@@ -215,6 +229,50 @@ func initResponseCache() {
 	}
 	responseCacheOn = true
 	common.SysLog("response cache redis connected")
+}
+
+func normalizeRedisEndpoint(addr string) string {
+	addr = strings.TrimSpace(addr)
+	if addr == "" {
+		return ""
+	}
+	host, port, err := net.SplitHostPort(addr)
+	if err != nil {
+		host = addr
+		port = "6379"
+		if strings.Contains(addr, ":") && !strings.Contains(addr, "]") {
+			parts := strings.Split(addr, ":")
+			if len(parts) == 2 && parts[1] != "" {
+				host = parts[0]
+				port = parts[1]
+			}
+		}
+	}
+	host = strings.Trim(host, "[]")
+	host = strings.ToLower(strings.TrimSpace(host))
+	if host == "localhost" {
+		host = "127.0.0.1"
+	}
+	if ip := net.ParseIP(host); ip != nil {
+		host = ip.String()
+	}
+	p, convErr := strconv.Atoi(port)
+	if convErr != nil || p <= 0 {
+		p = 6379
+	}
+	return net.JoinHostPort(host, strconv.Itoa(p))
+}
+
+func isSharedWithPrimaryRedis(cacheAddr string) bool {
+	conn := strings.TrimSpace(os.Getenv("REDIS_CONN_STRING"))
+	if conn == "" {
+		return false
+	}
+	opt, err := redis.ParseURL(conn)
+	if err != nil {
+		return false
+	}
+	return normalizeRedisEndpoint(opt.Addr) == normalizeRedisEndpoint(cacheAddr)
 }
 
 func responseCacheEnabled() bool {

@@ -11,6 +11,7 @@ var (
 	ResponseCacheEnabled       = true
 	ResponseCacheRedisAddr     = ""
 	ResponseCacheRedisPassword = ""
+	ResponseCacheAllowShared   = false
 	ResponseCachePrefix        = "relay:cache"
 	ResponseCacheTTLSeconds    = 21600
 	ResponseCacheMaxBodyBytes  = 2 << 20 // 2MB
@@ -18,6 +19,19 @@ var (
 )
 
 func init() {
+	ReloadResponseCacheConfigFromEnv()
+}
+
+func ReloadResponseCacheConfigFromEnv() {
+	ResponseCacheEnabled = true
+	ResponseCacheRedisAddr = ""
+	ResponseCacheRedisPassword = ""
+	ResponseCacheAllowShared = false
+	ResponseCachePrefix = "relay:cache"
+	ResponseCacheTTLSeconds = 21600
+	ResponseCacheMaxBodyBytes = 2 << 20 // 2MB
+	ResponseCacheHitBilling = false
+
 	if v := strings.TrimSpace(os.Getenv("CACHE_ENABLED")); v != "" {
 		ResponseCacheEnabled = strings.ToLower(v) != "false"
 	}
@@ -26,6 +40,9 @@ func init() {
 	}
 	if v := os.Getenv("CACHE_REDIS_PASSWORD"); v != "" {
 		ResponseCacheRedisPassword = v
+	}
+	if v := strings.TrimSpace(os.Getenv("CACHE_ALLOW_SHARED_REDIS")); v != "" {
+		ResponseCacheAllowShared = strings.ToLower(v) == "true"
 	}
 	if v := strings.TrimSpace(os.Getenv("CACHE_PREFIX")); v != "" {
 		ResponseCachePrefix = v
