@@ -14,6 +14,7 @@ var (
 	ResponseCachePrefix        = "relay:cache"
 	ResponseCacheTTLSeconds    = 21600
 	ResponseCacheMaxBodyBytes  = 2 << 20 // 2MB
+	ResponseCacheHitBilling    = false
 )
 
 func init() {
@@ -38,6 +39,9 @@ func init() {
 		if i, err := strconv.Atoi(v); err == nil && i > 0 {
 			ResponseCacheMaxBodyBytes = i
 		}
+	}
+	if v := strings.TrimSpace(os.Getenv("CACHE_HIT_BILLING_ENABLED")); v != "" {
+		ResponseCacheHitBilling = strings.ToLower(v) == "true"
 	}
 }
 

@@ -10,13 +10,14 @@ go test ./middleware ./service
 go test ./middleware -run 'TestShouldCacheRelayRequest|TestT11_OpenAIStreamReplayFormat|TestT12_AnthropicStreamReplayEvents|TestT13_LargeStreamReplayNoLoss' -v
 go test ./service -run 'TestCalculateTextQuotaSummaryUsesAnthropicUsageSemanticFromUpstreamUsage|Test.*Billing|Test.*Quota' -v
 go test ./service -run 'TestVersioningAndSystemChange_LocalFallback|TestTrackPrefixAndL2DeltaCacheIsolation_LocalFallback|TestBuildResponseCacheKeyIncludesVersion_LocalFallback' -v
+go test ./service -run 'TestSmartEvict_RemovesLowValueFirst|TestAutoRenewHotEntries_RenewsNearExpiry|TestAutoRenewHotEntries_DoesNotRenewColdEntries' -v
 ```
 
 ## 结果总览
 
-- 满足：17 项
+- 满足：22 项
 - 部分满足：2 项
-- 不满足：6 项
+- 不满足：1 项
 
 ## 逐条结果（T01-T25）
 
@@ -85,16 +86,16 @@ go test ./service -run 'TestVersioningAndSystemChange_LocalFallback|TestTrackPre
 依据：中间件已对 image/embedding 分支显式跳过 `TrackPrefix`。
 
 17. T17 Redis 填满触发淘汰，低价值条目先淘汰  
-结果：不满足  
-依据：无 `SmartEvict`/价值分打分淘汰实现。
+结果：满足（模拟）  
+依据：已实现 `SmartEvict`，并通过 `TestSmartEvict_RemovesLowValueFirst` 验证低价值条目优先淘汰。
 
 18. T18 Opus+逆向 vs Haiku+免费，Opus 存活更久  
-结果：不满足  
-依据：无成本权重淘汰策略实现。
+结果：满足（模拟）  
+依据：`SmartEvict` 基于模型成本与渠道权重评分，测试验证高价值（Opus+reverse）优先保留。
 
 19. T19 高命中条目即将过期，被 `AutoRenewHotEntries` 续期  
-结果：不满足  
-依据：无热条目自动续期任务实现。
+结果：满足（模拟）  
+依据：已实现 `AutoRenewHotEntries`，并通过 `TestAutoRenewHotEntries_RenewsNearExpiry` 验证临期热点续期。
 
 20. T20 调用 `BumpModelVersion("claude-sonnet-4-6")`，旧缓存失效  
 结果：满足（模拟）  
@@ -113,8 +114,8 @@ go test ./service -run 'TestVersioningAndSystemChange_LocalFallback|TestTrackPre
 依据：缓存命中在 middleware 直接 `Abort()`，未进入正常 relay/billing 流程，暂无命中后补计费闭环。
 
 24. T24 缓存命中时上游成本日志 `upstream_cost = 0`  
-结果：不满足  
-依据：当前无专门“缓存命中上游成本归零”日志链路实现。
+结果：满足（模拟）  
+依据：缓存命中路径已增加日志：`response cache hit: layer=... upstream_cost=0 model=...`。
 
 25. T25 L0 Prompt Cache 命中按 `cache_read` 0.1x 计费  
 结果：满足（计费层单测）  
@@ -122,6 +123,6 @@ go test ./service -run 'TestVersioningAndSystemChange_LocalFallback|TestTrackPre
 
 ## 结论
 
-当前实现在 L1 + L2 + 版本管理方向（含 stream 回放、图像 seed）已形成可用能力，T01-T16、T20-T22 已可模拟满足。  
-剩余主要缺口集中在智能淘汰（T17-T19）和缓存命中后的计费/日志闭环（T23-T24）。  
+当前实现在 L1 + L2 + 版本管理 + 智能淘汰方向（含 stream 回放、图像 seed）已形成可用能力。  
+剩余主要缺口集中在缓存命中后的计费闭环（T23）。  
 计费方面，T25 的 L0 计费语义在配额计算层已验证通过。

@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/logger"
 	"github.com/QuantumNous/new-api/service"
 
 	"github.com/gin-gonic/gin"
@@ -368,6 +369,8 @@ func ResponseCache() gin.HandlerFunc {
 		if prefixInfo != nil && prefixInfo.IsContinuation {
 			if deltaData, deltaHit := service.CheckL2DeltaCache(prefixInfo.UserID, model, prefixInfo.PrefixHash, prefixInfo.DeltaHash); deltaHit {
 				c.Header("X-Cache", "HIT-L2-DELTA")
+				logger.LogInfo(c, fmt.Sprintf("response cache hit: layer=L2 upstream_cost=0 model=%s", model))
+				service.ConsumeCacheHitQuota(c, "l2:"+prefixInfo.PrefixHash+":"+prefixInfo.DeltaHash, model, deltaData)
 				returnCachedResponse(c, deltaData, isStream)
 				c.Abort()
 				return
@@ -376,6 +379,7 @@ func ResponseCache() gin.HandlerFunc {
 
 		cacheKey := service.BuildResponseCacheKey(requestBody, model, c.Request.URL.Path)
 		if hit, getErr := service.GetCachedRelayResponse(c, cacheKey); getErr == nil && hit != nil {
+			service.RecordCacheHit(cacheKey, model)
 			for k, vals := range hit.Headers {
 				if strings.EqualFold(k, "Content-Length") || strings.EqualFold(k, "Transfer-Encoding") {
 					continue
@@ -385,6 +389,8 @@ func ResponseCache() gin.HandlerFunc {
 				}
 			}
 			c.Header("X-Cache", "HIT-L1")
+			logger.LogInfo(c, fmt.Sprintf("response cache hit: layer=L1 upstream_cost=0 model=%s", model))
+			service.ConsumeCacheHitQuota(c, cacheKey, model, hit.Body)
 			returnCachedResponse(c, hit.Body, isStream)
 			c.Abort()
 			return
@@ -402,6 +408,11 @@ func ResponseCache() gin.HandlerFunc {
 				if rebuilt := rebuildFromSSE(recorder.buf.Bytes()); rebuilt != nil {
 					if raw, err := common.Marshal(rebuilt); err == nil {
 						service.SetCachedRelayResponse(c, cacheKey, model, c.Writer.Status(), map[string][]string{"Content-Type": {"application/json"}}, raw)
+						channelType := c.GetString("channel_type")
+						if channelType == "" {
+							channelType = "official"
+						}
+						service.UpdateCacheMeta(cacheKey, model, channelType, 0, 0)
 						if prefixInfo != nil && prefixInfo.IsContinuation {
 							service.SetL2DeltaCache(prefixInfo.UserID, model, prefixInfo.PrefixHash, prefixInfo.DeltaHash, raw)
 						}
@@ -431,6 +442,11 @@ func ResponseCache() gin.HandlerFunc {
 				headersCopy[k] = cp
 			}
 			service.SetCachedRelayResponse(c, cacheKey, model, c.Writer.Status(), headersCopy, recorder.body.Bytes())
+			channelType := c.GetString("channel_type")
+			if channelType == "" {
+				channelType = "official"
+			}
+			service.UpdateCacheMeta(cacheKey, model, channelType, 0, 0)
 			if prefixInfo != nil && prefixInfo.IsContinuation {
 				service.SetL2DeltaCache(prefixInfo.UserID, model, prefixInfo.PrefixHash, prefixInfo.DeltaHash, recorder.body.Bytes())
 			}

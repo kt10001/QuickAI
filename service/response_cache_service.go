@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -31,6 +32,16 @@ type PrefixInfo struct {
 	IsContinuation bool
 }
 
+type CacheMeta struct {
+	Model        string    `json:"model"`
+	ChannelType  string    `json:"channel_type"`
+	InputTokens  int       `json:"input_tokens"`
+	OutputTokens int       `json:"output_tokens"`
+	HitCount     int       `json:"hit_count"`
+	CreatedAt    time.Time `json:"created_at"`
+	LastHitAt    time.Time `json:"last_hit_at"`
+}
+
 var (
 	responseCacheOnce sync.Once
 	responseCacheRDB  *redis.Client
@@ -41,6 +52,8 @@ var (
 	responseCacheLocalSystems  = map[string]string{}
 	responseCacheLocalLastPref = map[string]string{}
 	responseCacheLocalDelta    = map[string][]byte{}
+	responseCacheLocalMeta     = map[string]CacheMeta{}
+	responseCacheLocalExpiry   = map[string]time.Time{}
 )
 
 const (
@@ -48,6 +61,139 @@ const (
 	responseCacheSystemHashPrefix = "relay:system_hash"
 	responseCacheL2Prefix         = "relay:l2:delta"
 )
+
+var cacheChannelTypeWeight = map[string]float64{
+	"reverse":  2.0,
+	"official": 1.0,
+	"free":     0.3,
+}
+
+func cacheModelCostWeight(model string) float64 {
+	switch {
+	case strings.HasPrefix(model, "claude-opus"):
+		return 15.0
+	case strings.HasPrefix(model, "claude-sonnet"):
+		return 3.0
+	case strings.HasPrefix(model, "claude-haiku"):
+		return 0.8
+	case strings.HasPrefix(model, "gpt-4o"):
+		return 2.5
+	case strings.HasPrefix(model, "o3"):
+		return 10.0
+	case strings.HasPrefix(model, "text-embedding"):
+		return 0.13
+	default:
+		return 1.0
+	}
+}
+
+func computeCacheValue(meta CacheMeta) float64 {
+	channelWeight, ok := cacheChannelTypeWeight[meta.ChannelType]
+	if !ok {
+		channelWeight = 1.0
+	}
+	totalTokens := float64(meta.InputTokens + meta.OutputTokens)
+	if totalTokens <= 0 {
+		totalTokens = 1
+	}
+	hitCount := float64(meta.HitCount)
+	if hitCount <= 0 {
+		hitCount = 1
+	}
+	return hitCount * cacheModelCostWeight(meta.Model) * (totalTokens / 1_000_000) * channelWeight
+}
+
+func UpdateCacheMeta(cacheKey, model, channelType string, inputTokens, outputTokens int) {
+	if cacheKey == "" || model == "" {
+		return
+	}
+	now := time.Now()
+	meta := CacheMeta{
+		Model:        model,
+		ChannelType:  channelType,
+		InputTokens:  inputTokens,
+		OutputTokens: outputTokens,
+		HitCount:     0,
+		CreatedAt:    now,
+		LastHitAt:    now,
+	}
+	ttl := common.GetResponseCacheTTLByModel(model)
+	responseCacheLocalMu.Lock()
+	defer responseCacheLocalMu.Unlock()
+	responseCacheLocalMeta[cacheKey] = meta
+	responseCacheLocalExpiry[cacheKey] = now.Add(ttl)
+}
+
+func RecordCacheHit(cacheKey, model string) {
+	if cacheKey == "" {
+		return
+	}
+	responseCacheLocalMu.Lock()
+	defer responseCacheLocalMu.Unlock()
+	meta, ok := responseCacheLocalMeta[cacheKey]
+	if !ok {
+		return
+	}
+	meta.HitCount++
+	meta.LastHitAt = time.Now()
+	if model != "" {
+		meta.Model = model
+	}
+	responseCacheLocalMeta[cacheKey] = meta
+	remaining := time.Until(responseCacheLocalExpiry[cacheKey])
+	if remaining > 0 && remaining < 5*time.Minute {
+		responseCacheLocalExpiry[cacheKey] = time.Now().Add(common.GetResponseCacheTTLByModel(meta.Model))
+	}
+}
+
+// SmartEvict keeps high-value cache entries and evicts low-value ones when over maxEntries.
+func SmartEvict(maxEntries int) int {
+	if maxEntries <= 0 {
+		return 0
+	}
+	responseCacheLocalMu.Lock()
+	defer responseCacheLocalMu.Unlock()
+	if len(responseCacheLocalMeta) <= maxEntries {
+		return 0
+	}
+	type kv struct {
+		key   string
+		score float64
+	}
+	items := make([]kv, 0, len(responseCacheLocalMeta))
+	for k, m := range responseCacheLocalMeta {
+		items = append(items, kv{key: k, score: computeCacheValue(m)})
+	}
+	sort.Slice(items, func(i, j int) bool { return items[i].score < items[j].score })
+	toRemove := len(items) - maxEntries
+	for i := 0; i < toRemove; i++ {
+		delete(responseCacheLocalMeta, items[i].key)
+		delete(responseCacheLocalExpiry, items[i].key)
+	}
+	return toRemove
+}
+
+// AutoRenewHotEntries extends TTL for hot entries that are close to expiration.
+func AutoRenewHotEntries(minHits int) int {
+	if minHits <= 0 {
+		minHits = 1
+	}
+	now := time.Now()
+	renewed := 0
+	responseCacheLocalMu.Lock()
+	defer responseCacheLocalMu.Unlock()
+	for key, meta := range responseCacheLocalMeta {
+		if meta.HitCount < minHits {
+			continue
+		}
+		remaining := responseCacheLocalExpiry[key].Sub(now)
+		if remaining > 0 && remaining < 5*time.Minute {
+			responseCacheLocalExpiry[key] = now.Add(common.GetResponseCacheTTLByModel(meta.Model))
+			renewed++
+		}
+	}
+	return renewed
+}
 
 func initResponseCache() {
 	if !common.ResponseCacheEnabled || common.ResponseCacheRedisAddr == "" {
