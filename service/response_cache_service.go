@@ -199,6 +199,8 @@ func AutoRenewHotEntries(minHits int) int {
 }
 
 func initResponseCache() {
+	common.SysLog(fmt.Sprintf("response cache init start: enabled=%t addr=%s allow_shared=%t",
+		common.ResponseCacheEnabled, strings.TrimSpace(common.ResponseCacheRedisAddr), common.ResponseCacheAllowShared))
 	if !common.ResponseCacheEnabled {
 		common.SysLog("response cache disabled by CACHE_ENABLED")
 		responseCacheOn = false
@@ -209,7 +211,10 @@ func initResponseCache() {
 		responseCacheOn = false
 		return
 	}
-	if !common.ResponseCacheAllowShared && isSharedWithPrimaryRedis(common.ResponseCacheRedisAddr) {
+	shared := isSharedWithPrimaryRedis(common.ResponseCacheRedisAddr)
+	common.SysLog(fmt.Sprintf("response cache shared-redis check: shared=%t cache_addr=%s",
+		shared, normalizeRedisEndpoint(common.ResponseCacheRedisAddr)))
+	if !common.ResponseCacheAllowShared && shared {
 		common.SysError("response cache redis shares the same instance as primary redis; cache disabled for safety. Set CACHE_ALLOW_SHARED_REDIS=true to override")
 		responseCacheOn = false
 		return
