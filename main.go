@@ -251,6 +251,7 @@ func InitResources() error {
 
 	// 加载环境变量
 	common.InitEnv()
+	common.ReloadResponseCacheConfigFromEnv()
 
 	logger.SetupLogger()
 
