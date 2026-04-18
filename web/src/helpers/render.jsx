@@ -959,6 +959,8 @@ export const renderGroupOption = (item) => {
     }
   };
 
+  const secondaryText = item.desc || label;
+
   return (
     <div
       style={baseStyle}
@@ -969,9 +971,11 @@ export const renderGroupOption = (item) => {
         <Typography.Text strong type={disabled ? 'tertiary' : undefined}>
           {value}
         </Typography.Text>
-        <Typography.Text type='secondary' size='small'>
-          {label}
-        </Typography.Text>
+        {secondaryText ? (
+          <Typography.Text type='secondary' size='small'>
+            {secondaryText}
+          </Typography.Text>
+        ) : null}
       </div>
       {item.ratio && renderRatio(item.ratio)}
     </div>
