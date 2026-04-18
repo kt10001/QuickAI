@@ -138,9 +138,10 @@ const EditTokenModal = (props) => {
     const { success, message, data } = res.data;
     if (success) {
       let localGroupOptions = Object.entries(data).map(([group, info]) => ({
-        label: info.desc,
+        label: group,
         value: group,
-        ratio: info.ratio,
+        desc: info?.desc || '',
+        ratio: info?.ratio,
       }));
       if (statusState?.status?.default_use_auto_group) {
         if (localGroupOptions.some((group) => group.value === 'auto')) {
@@ -390,6 +391,9 @@ const EditTokenModal = (props) => {
                         placeholder={t('令牌分组，默认为用户的分组')}
                         optionList={groups}
                         renderOptionItem={renderGroupOption}
+                        renderSelectedItem={(optionNode) => {
+                          return optionNode?.label || optionNode?.value || '';
+                        }}
                         filter={(input, option) => {
                           const q = input.toLowerCase();
                           return (
